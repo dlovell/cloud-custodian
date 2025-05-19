@@ -1,5 +1,5 @@
 {
-  description = "Hello world flake using uv2nix";
+  description = "cloud-custodian flake using uv2nix";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -42,21 +42,18 @@
       # Create package overlay from workspace.
       overlay = workspace.mkPyprojectOverlay {
         # Prefer prebuilt binary wheels as a package source.
-        # Sdists are less likely to "just work" because of the metadata missing from uv.lock.
-        # Binary wheels are more likely to, but may still require overrides for library dependencies.
-        sourcePreference = "wheel"; # or sourcePreference = "sdist";
-        # Optionally customise PEP 508 environment
-        # environ = {
-        #   platform_release = "5.10.65";
-        # };
+        sourcePreference = "wheel"; 
       };
 
+      # Create a filtering overlay to remove c7n-awscc
+      filterAwsccOverlay = final: prev: 
+        let
+          # Remove c7n-awscc from the set of packages
+          filteredPkgs = lib.filterAttrs (name: value: name != "c7n-awscc") prev;
+        in
+          filteredPkgs;
+
       # Extend generated overlay with build fixups
-      #
-      # Uv2nix can only work with what it has, and uv.lock is missing essential metadata to perform some builds.
-      # This is an additional overlay implementing build fixups.
-      # See:
-      # - https://pyproject-nix.github.io/uv2nix/FAQ.html
       pyprojectOverrides = final: prev:
         let
           # Helper function to add setuptools to a package's build dependencies
@@ -77,19 +74,8 @@
             map (name: { inherit name; value = addSetuptools name; }) 
             packagesNeedingSetuptools
           );
-          
-          # HACK: required because c7n-awscc's build is impure since it depends
-          # on a changing aws zip file
-          # need a fix by perhaps checking in the build artifacts in git?
-          disableEditableOverrides = {
-            c7n-awscc = prev.c7n-awscc.overrideAttrs (old: {
-              # Filter out
-              makeEditable = false;
-              editableRoot = null;
-            });
-          };
         in
-          setupToolsOverrides // disableEditableOverrides;
+          setupToolsOverrides;
 
       pkgs = nixpkgs.legacyPackages.x86_64-linux;
 
@@ -103,6 +89,7 @@
             lib.composeManyExtensions [
               pyproject-build-systems.overlays.default
               overlay
+              filterAwsccOverlay  # Apply our filter for c7n-awscc
               pyprojectOverrides
             ]
           );
@@ -116,11 +103,8 @@
         lib.composeManyExtensions [
           editableOverlay
 
-          # Apply fixups for building an editable package of your workspace packages
           (final: prev: {
             c7n = prev.c7n.overrideAttrs (old: {
-              # It's a good idea to filter the sources going into an editable build
-              # so the editable package doesn't have to be rebuilt on every change.
               src = lib.fileset.toSource {
                 root = old.src;
                 fileset = lib.fileset.unions [
@@ -130,12 +114,6 @@
                 ];
               };
 
-              # Hatchling (our build system) has a dependency on the `editables` package when building editables.
-              #
-              # In normal Python flows this dependency is dynamically handled, and doesn't need to be explicitly declared.
-              # This behaviour is documented in PEP-660.
-              #
-              # With Nix the dependency needs to be explicitly declared.
               nativeBuildInputs =
                 old.nativeBuildInputs
                 ++ final.resolveBuildSystem {
@@ -146,34 +124,36 @@
         ]
       );
 
-      filteredDeps = lib.filterAttrs (name: value: name != "c7n-awscc") workspace.deps.all;
-        
-      virtualenv = editablePythonSet.mkVirtualEnv "c7n-dev-env" filteredDeps;
+      # For editable development environment
+      virtualenv = editablePythonSet.mkVirtualEnv "c7n-dev-env" (
+        lib.filterAttrs (name: value: name != "c7n-awscc") workspace.deps.all
+      );
+      
+      appEnv = pythonSet.mkVirtualEnv "c7n-app-env" (
+        lib.filterAttrs (name: value: name != "c7n-awscc") workspace.deps.default
+      );
+      
+      # Create a wrapper script that uses the appEnv environment
+      appScript = pkgs.writeShellScriptBin "custodian" ''
+        exec ${appEnv}/bin/custodian "$@"
+      '';
 
     in
     {
-      packages.x86_64-linux.default = pythonSet.mkVirtualEnv "c7n-env" workspace.deps.default;
+      # Use the wrapper script for the default package
+      packages.x86_64-linux.default = appScript;
 
       # Make custodian runnable with `nix run`
       apps.x86_64-linux = {
         default = {
           type = "app";
-          program = let
-            custodianScript = pkgs.writeShellScriptBin "custodian-dev" ''
-              export REPO_ROOT=$(git rev-parse --show-toplevel)
-              
-              exec ${virtualenv}/bin/custodian "$@"
-            '';
-          in "${custodianScript}/bin/custodian-dev";
+          program = "${appScript}/bin/custodian";
         };
       };
 
-      # This example provides two different modes of development:
-      # - Impurely using uv to manage virtual environments
-      # - Pure development using uv2nix to manage virtual environments
+      # Development shells
       devShells.x86_64-linux = {
-        # It is of course perfectly OK to keep using an impure virtualenv workflow and only use uv2nix to build packages.
-        # This devShell simply adds Python and undoes the dependency leakage done by Nixpkgs Python infrastructure.
+        # Impure development environment
         impure = pkgs.mkShell {
           packages = [
             python
@@ -188,7 +168,6 @@
             }
             // lib.optionalAttrs pkgs.stdenv.isLinux {
               # Python libraries often load native shared objects using dlopen(3).
-              # Setting LD_LIBRARY_PATH makes the dynamic library loader aware of libraries without using RPATH for lookup.
               LD_LIBRARY_PATH = lib.makeLibraryPath pkgs.pythonManylinuxPackages.manylinux1;
             };
           shellHook = ''
@@ -196,15 +175,13 @@
           '';
         };
 
-        # This devShell uses uv2nix to construct a virtual environment purely from Nix
         uv2nix = pkgs.mkShell {
           packages = [
-            virtualenv  # Use the top-level virtualenv
+            virtualenv
             pkgs.uv
           ];
 
           env = {
-            # Don't create venv using uv
             UV_NO_SYNC = "1";
 
             # Force uv to use Python interpreter from venv
@@ -217,9 +194,7 @@
           shellHook = ''
             # Undo dependency propagation by nixpkgs.
             unset PYTHONPATH
-
-            # Get repository root using git. This is expanded at runtime by the editable `.pth` machinery.
-            export REPO_ROOT=$(git rev-parse --show-toplevel)
+            echo "Welcome to uv2nix dev shell!"
           '';
         };
       };
