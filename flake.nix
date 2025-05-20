@@ -154,6 +154,7 @@
       # Development shells
       devShells.x86_64-linux = {
         # Impure development environment
+        default = self.devShells.x86_64-linux.uv2nix;
         impure = pkgs.mkShell {
           packages = [
             python
