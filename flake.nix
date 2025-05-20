@@ -38,13 +38,14 @@
       pkgs = import nixpkgs {
         inherit system;
         config = {
-          allowUnfreePredicate = pkg: builtins.elem (lib.getName pkg) [
-            "terraform"
-          ];
+          allowUnfreePredicate =
+            pkg:
+            builtins.elem (lib.getName pkg) [
+              "terraform"
+            ];
         };
       };
       python = pkgs.python312;
-
 
       # Load a uv workspace from a workspace root.
       # Uv2nix treats all uv projects as workspace projects.
@@ -53,40 +54,46 @@
       # Create package overlay from workspace.
       overlay = workspace.mkPyprojectOverlay {
         # Prefer prebuilt binary wheels as a package source.
-        sourcePreference = "wheel"; 
+        sourcePreference = "wheel";
       };
 
       # Create a filtering overlay to remove c7n-awscc
-      filterAwsccOverlay = final: prev: 
+      filterAwsccOverlay =
+        final: prev:
         let
           # Remove c7n-awscc from the set of packages
           filteredPkgs = lib.filterAttrs (name: value: name != "c7n-awscc") prev;
         in
-          filteredPkgs;
+        filteredPkgs;
 
       # Extend generated overlay with build fixups
-      pyprojectOverrides = final: prev:
+      pyprojectOverrides =
+        final: prev:
         let
           # Helper function to add setuptools to a package's build dependencies
-          addSetuptools = pkgName: prev.${pkgName}.overrideAttrs (old: {
-            nativeBuildInputs = (old.nativeBuildInputs or []) ++ [
-              final.setuptools
-            ];
-          });
-          
+          addSetuptools =
+            pkgName:
+            prev.${pkgName}.overrideAttrs (old: {
+              nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [
+                final.setuptools
+              ];
+            });
+
           packagesNeedingSetuptools = [
             "crcmod"
             "cos-python-sdk-v5"
             "netifaces"
             "placebo"
           ];
-          
+
           setupToolsOverrides = builtins.listToAttrs (
-            map (name: { inherit name; value = addSetuptools name; }) 
-            packagesNeedingSetuptools
+            map (name: {
+              inherit name;
+              value = addSetuptools name;
+            }) packagesNeedingSetuptools
           );
         in
-          setupToolsOverrides;
+        setupToolsOverrides;
 
       pythonSet =
         (pkgs.callPackage pyproject-nix.build.packages {
@@ -96,7 +103,7 @@
             lib.composeManyExtensions [
               pyproject-build-systems.overlays.default
               overlay
-              filterAwsccOverlay  # Apply our filter for c7n-awscc
+              filterAwsccOverlay # Apply our filter for c7n-awscc
               pyprojectOverrides
             ]
           );
@@ -135,11 +142,11 @@
       virtualenv = editablePythonSet.mkVirtualEnv "c7n-dev-env" (
         lib.filterAttrs (name: value: name != "c7n-awscc") workspace.deps.all
       );
-      
+
       appEnv = pythonSet.mkVirtualEnv "c7n-app-env" (
         lib.filterAttrs (name: value: name != "c7n-awscc") workspace.deps.default
       );
-      
+
       # Create a wrapper script that uses the appEnv environment
       appScript = pkgs.writeShellScriptBin "custodian" ''
         exec ${appEnv}/bin/custodian "$@"
