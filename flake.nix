@@ -34,6 +34,12 @@
     }:
     let
       inherit (nixpkgs) lib;
+      system = "x86_64-linux";
+      pkgs = import nixpkgs {
+        inherit system;
+      };
+      python = pkgs.python312;
+
 
       # Load a uv workspace from a workspace root.
       # Uv2nix treats all uv projects as workspace projects.
@@ -76,10 +82,6 @@
           );
         in
           setupToolsOverrides;
-
-      pkgs = nixpkgs.legacyPackages.x86_64-linux;
-
-      python = pkgs.python312;
 
       pythonSet =
         (pkgs.callPackage pyproject-nix.build.packages {
@@ -141,10 +143,10 @@
     in
     {
       # Use the wrapper script for the default package
-      packages.x86_64-linux.default = appScript;
+      packages.${system}.default = appScript;
 
       # Make custodian runnable with `nix run`
-      apps.x86_64-linux = {
+      apps.${system} = {
         default = {
           type = "app";
           program = "${appScript}/bin/custodian";
@@ -152,9 +154,9 @@
       };
 
       # Development shells
-      devShells.x86_64-linux = {
+      devShells.${system} = {
         # Impure development environment
-        default = self.devShells.x86_64-linux.uv2nix;
+        default = self.devShells.${system}.uv2nix;
         impure = pkgs.mkShell {
           packages = [
             python
