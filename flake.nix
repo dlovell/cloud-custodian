@@ -150,6 +150,8 @@
       ];
     in
     {
+      formatter.${system} = pkgs.nixfmt-rfc-style;
+
       # Use the wrapper script for the default package
       packages.${system}.default = appScript;
 
