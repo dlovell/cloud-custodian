@@ -37,6 +37,11 @@
       system = "x86_64-linux";
       pkgs = import nixpkgs {
         inherit system;
+        config = {
+          allowUnfreePredicate = pkg: builtins.elem (lib.getName pkg) [
+            "terraform"
+          ];
+        };
       };
       python = pkgs.python312;
 
@@ -140,6 +145,9 @@
         exec ${appEnv}/bin/custodian "$@"
       '';
 
+      toolsPackages = [
+        pkgs.terraform
+      ];
     in
     {
       # Use the wrapper script for the default package
@@ -161,6 +169,7 @@
           packages = [
             python
             pkgs.uv
+            toolsPackages
           ];
           env =
             {
@@ -182,6 +191,7 @@
           packages = [
             virtualenv
             pkgs.uv
+            toolsPackages
           ];
 
           env = {
