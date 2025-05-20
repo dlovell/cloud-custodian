@@ -194,6 +194,7 @@
           shellHook = ''
             # Undo dependency propagation by nixpkgs.
             unset PYTHONPATH
+            export REPO_ROOT=$(git rev-parse --show-toplevel)
             echo "Welcome to uv2nix dev shell!"
           '';
         };
